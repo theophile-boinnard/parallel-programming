@@ -1,0 +1,7 @@
+Figures/
+__pycache__/
+disk_1.h5
+disk_1.xdmf
+mesh.*
+mt.*
+old/

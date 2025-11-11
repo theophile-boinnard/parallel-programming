@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 
 ### Main ###
 
-N = 4
+N = 8
 mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, N, dolfinx.mesh.CellType.triangle)
 tdim = mesh.topology.dim
 index_map = mesh.topology.index_map(tdim)

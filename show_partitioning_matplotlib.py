@@ -75,31 +75,34 @@ if mesh_type=='square':
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, N, dolfinx.mesh.CellType.triangle)
     
 tdim = mesh.topology.dim
-
 mesh.topology.create_connectivity(tdim, 0)
 
-imap_cells = mesh.topology.index_map(tdim)
-imap_nodes = mesh.topology.index_map(0)
-
-num_local_cells = imap_cells.size_local
-num_local_nodes = imap_nodes.size_local
-
-cells = mesh.topology.connectivity(tdim, 0).array.reshape((-1, 3))
-nodes = mesh.geometry.x[:, :2]
-cells_local = cells[:num_local_cells, :]
-nodes_local = nodes[:num_local_nodes, :2]
-
-topology, cell_types, geometry = dolfinx.plot.vtk_mesh(mesh)
+topology, cell_types, geometry = dolfinx.plot.vtk_mesh(mesh) # helper function to help remove ghosts nodes and elements
 nodes = geometry[:, :2]
 cells = topology.reshape((-1, 4))[:, 1:]
 
 tri = Triangulation(nodes, cells) # Generate the triangulation
+
+index_map = mesh.topology.index_map(0)
+I_global_part = index_map.local_to_global(np.arange(tri.Nnodes))
+print(f'{mesh.geometry.input_global_indices.shape=}')
+print(f'{mesh.geometry.input_global_indices.min()=}')
+print(f'{mesh.geometry.input_global_indices.max()=}')
+print(f'{I_global_part.shape=}')
+print(f'{I_global_part.min()=}')
+print(f'{I_global_part.max()=}')
+#I_global = mesh.geometry.input_global_indices[I_global_part]
+#I_global = I_global_part[mesh.geometry.input_global_indices]
+#I_global = mesh.geometry.input_global_indices[:index_map.size_local] # remove ghost points
+I_global = mesh.geometry.input_global_indices[:tri.Nnodes]
+I = MPI.COMM_WORLD.gather(I_global, root=0)
 
 print(f'Rank {MPI.COMM_WORLD.rank} has {tri.Nnodes} nodes and {tri.Nelems} elements')
 
 #ax.tripcolor(tri.tri_plt, facecolors=MPI.COMM_WORLD.rank * np.ones(tri.Nelems), edgecolors='black', cmap='viridis')
 
 tri = MPI.COMM_WORLD.gather(tri, root=0)
+
 
 if MPI.COMM_WORLD.rank==0:
     fig, ax = plt.subplots()
@@ -110,5 +113,13 @@ if MPI.COMM_WORLD.rank==0:
     for i in range(MPI.COMM_WORLD.size):
         facecolors = i*np.ones(tri[i].Nelems)
         ax.tripcolor(tri[i].tri_plt, facecolors=facecolors, edgecolors='black', cmap=cmap, norm=norm, alpha=0.5)
+        
+    if mesh_type=='from_file':
+        
+        global_tri = Triangulation.from_file(name + extension) # Read full mesh 
+        
+        for i in range(MPI.COMM_WORLD.size):
+            nodecolors = i*np.ones(I[i].shape)
+            ax.scatter(global_tri.nodes[I[i], 0], global_tri.nodes[I[i], 1], c=nodecolors, cmap=cmap, norm=norm, alpha=0.5)
 
     plt.show()

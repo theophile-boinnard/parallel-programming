@@ -33,7 +33,7 @@ topology, cell_types, geometry = dolfinx.plot.vtk_mesh(mesh)
 nodes = geometry[:, :2]
 cells = topology.reshape((-1, 4))[:, 1:]
 
-tri = Triangulation(nodes, cells) # Generate the triangulation
+tri = Triangulation(nodes, cells) # Create a triangulation for each sub-mesh
 
 I, J, V = get_mass_matrix(tri, output='data')
 
@@ -56,6 +56,8 @@ if MPI.COMM_WORLD.rank==0:
     
     M = csr_matrix((V, (I, J)), shape=(np.max(I)+1, np.max(I)+1)) # Build mass matrix in csr format
     M.sum_duplicates() # Duplicate values must be summed
+    
+# Verify with dolfinx #
     
 V = dolfinx.fem.functionspace(mesh, ('CG', 1)) # Continuous Galerkin P^1 space
 u = ufl.TrialFunction(V)
@@ -86,6 +88,9 @@ M_dolfinx = gather_PETScMatrix(M_dolfinx, root=0)
         
 if MPI.COMM_WORLD.rank==0:
     diff = np.abs(M_dolfinx - M)
+    
+    print(f'{M.nnz=}')
+    print(f'{M_dolfinx.nnz=}')
     
     print(f'{M.sum()=}')
     print(f'{M_dolfinx.sum()=}')

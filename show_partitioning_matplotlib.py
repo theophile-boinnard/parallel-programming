@@ -10,6 +10,7 @@ import ufl
 import basix
 from mpi4py import MPI # Necessary for dolfinx, even if we are not parallelizing yet
 from dolfinx.graph import partitioner_parmetis
+partitioner = dolfinx.mesh.create_cell_partitioner(partitioner_parmetis())
 from dolfinx.io import XDMFFile, gmsh as gmshio
 
 import meshio
@@ -23,75 +24,57 @@ import matplotlib as mpl
 
 ### Main ###
 
-partitioner = dolfinx.mesh.create_cell_partitioner(partitioner_parmetis())
+mesh_type = 'from_file' # either 'from_file' or 'square'
 
-# Abandon reading mesh for now #
-'''
-filename = 'disk_1.mesh'
+assert mesh_type in ['from_file', 'square']
 
-if MPI.COMM_WORLD.rank==0:
-    read_mesh = meshio.read(filename)
-    nodes = read_mesh.points[:, :2]
-    elems = read_mesh.cells_dict['triangle']
-else:
-    nodes = None
-    elems = None
+if mesh_type=='from_file':
+
+    name = 'disk_1'
+    extension = '.mesh'
+    filename = name + extension
+
+    # From https://jsdokken.com/dolfinx-tutorial/chapter3/subdomains.html
+    # Thanks dokken
+
+    def create_mesh(mesh, cell_type, prune_z=False):
+        cells = mesh.get_cells_type(cell_type)
+        if "gmsh:physical" in mesh.cell_data:
+            cell_data = mesh.get_cell_data("gmsh:physical", cell_type)
+        else:
+            cell_data = np.zeros(cells.shape[0], dtype=np.int32)
+        points = mesh.points[:, :2] if prune_z else mesh.points
+        out_mesh = meshio.Mesh(
+            points=points,
+            cells={cell_type: cells},
+            cell_data={"name_to_read": [cell_data.astype(np.int32)]},
+        )
+        return out_mesh
+
+    if MPI.COMM_WORLD.rank==0:
+        # Read in mesh
+        msh = meshio.read(filename)
+
+        # Create and save one file for the mesh, and one file for the facets
+        triangle_mesh = create_mesh(msh, "triangle", prune_z=True)
+        line_mesh = create_mesh(msh, "line", prune_z=True)
+        meshio.write("mesh.xdmf", triangle_mesh)
+        meshio.write("mt.xdmf", line_mesh)
+    MPI.COMM_WORLD.barrier()
+
+    with XDMFFile(MPI.COMM_WORLD, "mesh.xdmf", "r") as xdmf:
+        mesh = xdmf.read_mesh(name="Grid")
+        ct = xdmf.read_meshtags(mesh, name="Grid")
+    mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
+    with XDMFFile(MPI.COMM_WORLD, "mt.xdmf", "r") as xdmf:
+        ft = xdmf.read_meshtags(mesh, name="Grid")
+
+if mesh_type=='square':
+
+    N = 8
+    mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, N, dolfinx.mesh.CellType.triangle)
     
-nodes = MPI.COMM_WORLD.bcast(nodes, root=0)
-elems = MPI.COMM_WORLD.bcast(elems, root=0)
-
-c_el = ufl.Mesh(basix.ufl.element("Lagrange", "triangle", 1, shape=(2,)))
-mesh = dolfinx.mesh.create_mesh(MPI.COMM_WORLD, cells=elems, x=nodes, e=c_el, partitioner=partitioner) # dolfinx partitions the mesh
-'''
-
-name = 'disk_1'
-extension = '.mesh'
-filename = name + extension
-
-
-# From https://jsdokken.com/dolfinx-tutorial/chapter3/subdomains.html
-# Thanks dokken
-
-def create_mesh(mesh, cell_type, prune_z=False):
-    cells = mesh.get_cells_type(cell_type)
-    if "gmsh:physical" in mesh.cell_data:
-        cell_data = mesh.get_cell_data("gmsh:physical", cell_type)
-    else:
-        cell_data = np.zeros(cells.shape[0], dtype=np.int32)
-    points = mesh.points[:, :2] if prune_z else mesh.points
-    out_mesh = meshio.Mesh(
-        points=points,
-        cells={cell_type: cells},
-        cell_data={"name_to_read": [cell_data.astype(np.int32)]},
-    )
-    return out_mesh
-
-if MPI.COMM_WORLD.rank==0:
-    # Read in mesh
-    msh = meshio.read(filename)
-
-    # Create and save one file for the mesh, and one file for the facets
-    triangle_mesh = create_mesh(msh, "triangle", prune_z=True)
-    line_mesh = create_mesh(msh, "line", prune_z=True)
-    meshio.write("mesh.xdmf", triangle_mesh)
-    meshio.write("mt.xdmf", line_mesh)
-MPI.COMM_WORLD.barrier()
-
-with XDMFFile(MPI.COMM_WORLD, "mesh.xdmf", "r") as xdmf:
-    mesh = xdmf.read_mesh(name="Grid")
-    ct = xdmf.read_meshtags(mesh, name="Grid")
-mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
-with XDMFFile(MPI.COMM_WORLD, "mt.xdmf", "r") as xdmf:
-    ft = xdmf.read_meshtags(mesh, name="Grid")
-
-
-#N = 4
-#mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, N, dolfinx.mesh.CellType.triangle)
 tdim = mesh.topology.dim
-
-# tri contains only a fraction of the total mesh 
-# nodes = mesh.geometry.x[:, :2] # Recover the nodes
-# cells = mesh.topology.connectivity(mesh.topology.dim, 0).array.reshape((-1, 3)) # Recover the elems
 
 mesh.topology.create_connectivity(tdim, 0)
 

@@ -1,3 +1,5 @@
+# Source : https://fenicsproject.discourse.group/t/plot-mesh-parallel-show-partitioning/16589 #
+
 import pyvista, dolfinx
 from mpi4py import MPI
 

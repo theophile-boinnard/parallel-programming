@@ -112,9 +112,11 @@ if MPI.COMM_WORLD.rank==0:
     plt.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, orientation='vertical', label='rank')
     for i in range(MPI.COMM_WORLD.size):
         facecolors = i*np.ones(tri[i].Nelems)
+        nodecolors = i*np.ones(tri[i].Nnodes)
         ax.tripcolor(tri[i].tri_plt, facecolors=facecolors, edgecolors='black', cmap=cmap, norm=norm, alpha=0.5)
+        ax.scatter(tri[i].nodes[:, 0], tri[i].nodes[:,1], c=nodecolors, cmap=cmap, norm=norm, alpha=0.5)
         
-    if mesh_type=='from_file':
+    if mesh_type=='from_file' and False:
         
         global_tri = Triangulation.from_file(name + extension) # Read full mesh 
         

@@ -78,8 +78,8 @@ tdim = mesh.topology.dim
 mesh.topology.create_connectivity(tdim, 0)
 
 topology, cell_types, geometry = dolfinx.plot.vtk_mesh(mesh) # helper function to help remove ghosts nodes and elements
-nodes = geometry[:, :2]
-cells = topology.reshape((-1, 4))[:, 1:]
+nodes = geometry[:, :2] # Note that here I have still the ghost nodes
+cells = topology.reshape((-1, 4))[:, 1:] # Whereas here I have only the elements on the current node
 
 tri = Triangulation(nodes, cells) # Generate the triangulation
 
@@ -93,13 +93,11 @@ print(f'{I_global_part.min()=}')
 print(f'{I_global_part.max()=}')
 #I_global = mesh.geometry.input_global_indices[I_global_part]
 #I_global = I_global_part[mesh.geometry.input_global_indices]
-#I_global = mesh.geometry.input_global_indices[:index_map.size_local] # remove ghost points
-I_global = mesh.geometry.input_global_indices[:tri.Nnodes]
+I_global = mesh.geometry.input_global_indices[:index_map.size_local] # remove ghost points
+#I_global = mesh.geometry.input_global_indices[:tri.Nnodes]
 I = MPI.COMM_WORLD.gather(I_global, root=0)
 
 print(f'Rank {MPI.COMM_WORLD.rank} has {tri.Nnodes} nodes and {tri.Nelems} elements')
-
-#ax.tripcolor(tri.tri_plt, facecolors=MPI.COMM_WORLD.rank * np.ones(tri.Nelems), edgecolors='black', cmap='viridis')
 
 tri = MPI.COMM_WORLD.gather(tri, root=0)
 
@@ -112,12 +110,13 @@ if MPI.COMM_WORLD.rank==0:
     plt.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, orientation='vertical', label='rank')
     for i in range(MPI.COMM_WORLD.size):
         facecolors = i*np.ones(tri[i].Nelems)
-        nodecolors = i*np.ones(tri[i].Nnodes)
+        #nodecolors = i*np.ones(tri[i].Nnodes)
         ax.tripcolor(tri[i].tri_plt, facecolors=facecolors, edgecolors='black', cmap=cmap, norm=norm, alpha=0.5)
-        ax.scatter(tri[i].nodes[:, 0], tri[i].nodes[:,1], c=nodecolors, cmap=cmap, norm=norm, alpha=0.5)
+        #ax.scatter(tri[i].nodes[:, 0], tri[i].nodes[:,1], c=nodecolors, cmap=cmap, norm=norm, alpha=0.5)
         
-    if mesh_type=='from_file' and False:
+    if mesh_type=='from_file':
         
+        # This piece of code is to verify I have the good global indexing
         global_tri = Triangulation.from_file(name + extension) # Read full mesh 
         
         for i in range(MPI.COMM_WORLD.size):

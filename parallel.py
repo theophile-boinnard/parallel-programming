@@ -8,14 +8,14 @@
 import dolfinx 
 import ufl
 import basix
-from mpi4py import MPI # Necessary for dolfinx, even if we are not parallelizing yet
+from mpi4py import MPI
 from dolfinx.graph import partitioner_parmetis
 from petsc4py import PETSc
 from dolfinx.fem.petsc import assemble_matrix
 
 import meshio
 import numpy as np
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, coo_matrix
 
 from Triangulation import Triangulation
 from serial import get_mass_matrix
@@ -24,47 +24,163 @@ import matplotlib.pyplot as plt
 
 ### Main ###
 
-N = 8
+DEBUG = True
+PLOT = False
+
+def log_info(msg, out=False):
+    if out:
+        print(msg)
+
+N = 4
 mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, N, dolfinx.mesh.CellType.triangle)
 tdim = mesh.topology.dim
-index_map = mesh.topology.index_map(tdim)
+#elem_index_map = mesh.topology.index_map(tdim)
+#node_index_map = mesh.topology.index_map(0)
+
+#elems = domain.topology.connectivity(tdim, 0).array.reshape((-1, 3))
+#nodes = domain.geometry.x[:, :2]
 
 topology, cell_types, geometry = dolfinx.plot.vtk_mesh(mesh)
-nodes = geometry[:, :2]
-cells = topology.reshape((-1, 4))[:, 1:]
+nodes = geometry[:, :2] # Includes ghost nodes
+cells = topology.reshape((-1, 4))[:, 1:] # Only elems on proc
 
 tri = Triangulation(nodes, cells) # Create a triangulation for each sub-mesh
 
-I, J, V = get_mass_matrix(tri, output='data')
+I, J, V = get_mass_matrix(tri, output='data') # Compute mass matrix on sub-mesh
+# Some of the I, J are associated to ghost nodes! They must be send to the proper sub-matrix
+
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {I.shape=}', DEBUG)
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {J.shape=}', DEBUG)
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {I=}', DEBUG)
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {J=}', DEBUG)
+
+log_info(f'Rank {MPI.COMM_WORLD.rank} - Surface of sub-mesh = {np.sum(tri.elem_surf)}', DEBUG)
+log_info(f'Rank {MPI.COMM_WORLD.rank} - Sum of mass matrix entries on sub-mesh = {np.sum(V)}', DEBUG)
 
 index_map = mesh.topology.index_map(0)
+local_indices = np.where(I<index_map.size_local) # On current rank, we only keep the rows of the owned nodes
+ghost_indices = np.where(I>=index_map.size_local) # The rows of ghost nodes must be comunicated to other ranks
+
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {local_indices=}', DEBUG)
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {ghost_indices=}', DEBUG)
+
+I_local = I[local_indices]
+J_local = J[local_indices]
+V_local = V[local_indices]
+
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {I_local=}', DEBUG)
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {J_local=}', DEBUG)
+
+#I_global = index_map.local_to_global(I_local)
+#J_global = index_map.local_to_global(J_local)
+
+I_ghost = I[ghost_indices]
+J_ghost = J[ghost_indices]
+V_ghost = V[ghost_indices]
+
+I_ghost_global = index_map.local_to_global(I_ghost)
+J_ghost_global = index_map.local_to_global(J_ghost)
+
+log_info(f'Rank {MPI.COMM_WORLD.rank} - Before allgather - {I_ghost_global=}', DEBUG)
+I_ghost_global = np.concatenate(MPI.COMM_WORLD.allgather(I_ghost_global)) # we do not know to which rank send the ghost nodes, so we send it to everyone
+J_ghost_global = np.concatenate(MPI.COMM_WORLD.allgather(J_ghost_global))
+V_ghost = np.concatenate(MPI.COMM_WORLD.allgather(V_ghost))
+
+log_info(f'Rank {MPI.COMM_WORLD.rank} - After allgather - {I_ghost_global=}', DEBUG)
+
+# Keep only the vertices on current proc #
+global_indices = index_map.local_to_global(np.arange(index_map.size_local)) # If a global index of recieved ghost point is not in this array, it must be removed
+accepted_vertices = np.isin(I_ghost_global, global_indices)
+I_ghost_global = I_ghost_global[accepted_vertices]
+J_ghost_global = J_ghost_global[accepted_vertices]
+V_ghost = V_ghost[accepted_vertices]
+
+log_info(f'Rank {MPI.COMM_WORLD.rank} - Ghost kept - {I_ghost_global=}', DEBUG)
+I_ghost_local = index_map.global_to_local(I_ghost_global)
+J_ghost_local = index_map.global_to_local(J_ghost_global)
+
+I = np.concatenate((I_local, I_ghost_local))
+J = np.concatenate((J_local, J_ghost_local))
+V = np.concatenate((V_local, V_ghost))
+
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {I=}', DEBUG)
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {J=}', DEBUG)
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {V=}', DEBUG)
+
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {I.min()=}', DEBUG)
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {I.max()=}', DEBUG)
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {J.min()=}', DEBUG)
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {J.max()=}', DEBUG)
+
+M = csr_matrix((V, (I, J)), shape=(index_map.size_local, (N+1)**2)) # automatic sum of duplicate entries
+M = M.tocoo()
+I = M.row
+J = M.col
+V = M.data
 I_global = index_map.local_to_global(I)
 J_global = index_map.local_to_global(J)
 
-print(f'Rank {MPI.COMM_WORLD.rank} - Surface of sub-mesh = {np.sum(tri.elem_surf)}')
-print(f'Rank {MPI.COMM_WORLD.rank} - Sum of mass matrix entries on sub-mesh = {np.sum(V)}')
-
-I = MPI.COMM_WORLD.gather(I_global, root=0)
-J = MPI.COMM_WORLD.gather(J_global, root=0)
-V = MPI.COMM_WORLD.gather(V, root=0)
-
-if MPI.COMM_WORLD.rank==0:
-    
-    I = np.concatenate(I)
-    J = np.concatenate(J)
-    V = np.concatenate(V)
-    
-    M = csr_matrix((V, (I, J)), shape=(np.max(I)+1, np.max(I)+1)) # Build mass matrix in csr format
-    M.sum_duplicates() # Duplicate values must be summed
+I_global = MPI.COMM_WORLD.gather(I_global, root=0)
+J_global = MPI.COMM_WORLD.gather(J_global, root=0)
+V_global = MPI.COMM_WORLD.gather(V, root=0)
     
 # Verify with dolfinx #
     
-V = dolfinx.fem.functionspace(mesh, ('CG', 1)) # Continuous Galerkin P^1 space
-u = ufl.TrialFunction(V)
-v = ufl.TestFunction(V)
+W = dolfinx.fem.functionspace(mesh, ('CG', 1)) # Continuous Galerkin P^1 space
+u = ufl.TrialFunction(W)
+v = ufl.TestFunction(W)
 m = dolfinx.fem.form(u * v * ufl.dx)
 M_dolfinx = assemble_matrix(m)
 M_dolfinx.assemble()
+
+# Show sub matrices #
+
+# https://fenicsproject.discourse.group/t/conversion-from-array-to-petsc-and-from-petsc-to-array/6941
+def petsc2array(v):
+    s=v.getValues(range(0, v.getSize()[0]), range(0,  v.getSize()[1]))
+    return s
+
+def local_petsc_matrix(A: PETSc.Mat):
+    # Row ownership range
+    r0, r1 = A.getOwnershipRange()
+
+    # Full column range
+    ncols = A.getSize()[1]
+    cols = range(ncols)
+
+    # Extract values (this returns a NumPy array)
+    local_block = A.getValues(range(r0, r1), cols)
+    return local_block
+
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {mesh.geometry.input_global_indices.max()=}', DEBUG)
+Md = local_petsc_matrix(M_dolfinx)
+#M = csr_matrix((V, (I, J)), shape=(index_map.size_local, (N+1)**2))
+
+diff = np.abs(Md - M.todense())
+atol = 1e-10
+
+if PLOT:
+
+    fig, axs = plt.subplots(1, 3)
+    axs[0].imshow(np.heaviside(M.todense(), 0))
+    axs[0].set_title('M perso')
+    axs[1].imshow(np.heaviside(Md, 0))
+    axs[1].set_title('M dolfinx')
+    axs[2].imshow(diff>atol)
+    axs[2].set_title('difference')
+    fig.suptitle(f'Rank {MPI.COMM_WORLD.rank}')
+    plt.show()
+
+# Show full mass matrix #
+
+if MPI.COMM_WORLD.rank==0:
+    
+    I = np.concatenate(I_global)
+    J = np.concatenate(J_global)
+    V = np.concatenate(V_global)
+    
+    M = csr_matrix((V, (I, J)), shape=(np.max(I)+1, np.max(I)+1)) # Build mass matrix in csr format
+    M.sum_duplicates() # Duplicate values must be summed
 
 # Taken from https://github.com/jorgensd/dolfinx_mpc/blob/main/python/src/dolfinx_mpc/utils/test.py
 # Again, thanks dokken
@@ -88,6 +204,7 @@ M_dolfinx = gather_PETScMatrix(M_dolfinx, root=0)
         
 if MPI.COMM_WORLD.rank==0:
     diff = np.abs(M_dolfinx - M)
+    atol = 1e-10
     
     print(f'{M.nnz=}')
     print(f'{M_dolfinx.nnz=}')
@@ -95,12 +212,16 @@ if MPI.COMM_WORLD.rank==0:
     print(f'{M.sum()=}')
     print(f'{M_dolfinx.sum()=}')
     
-    #fig, axs = plt.subplots(1, 2)
-    #axs[0].imshow(M.todense())
-    #axs[1].imshow(M_dolfinx.todense())
-    #plt.show()
+    if PLOT:
+        fig, axs = plt.subplots(1, 3)
+        axs[0].imshow(np.heaviside(M.todense(), 0))
+        axs[0].set_title('M perso')
+        axs[1].imshow(np.heaviside(M_dolfinx.todense(), 0))
+        axs[1].set_title('M dolfinx')
+        axs[2].imshow(diff.todense()>atol)
+        axs[2].set_title('difference')
+        plt.show()
     
-    atol = 1e-10
     print(f'Mamimal difference between matrices entries {diff.max()}')
     assert diff.max() < atol
     print('Succesful computation of mass matrix')

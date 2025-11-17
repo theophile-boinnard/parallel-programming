@@ -2,6 +2,7 @@
 
 import pyvista, dolfinx
 from mpi4py import MPI
+import numpy as np
 
 show_partitioning = True # or True
 

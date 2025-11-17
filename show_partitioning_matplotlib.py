@@ -24,7 +24,7 @@ import matplotlib as mpl
 
 ### Main ###
 
-mesh_type = 'from_file' # either 'from_file' or 'square'
+mesh_type = 'square' # either 'from_file' or 'square'
 
 assert mesh_type in ['from_file', 'square']
 
@@ -71,15 +71,20 @@ if mesh_type=='from_file':
 
 if mesh_type=='square':
 
-    N = 8
+    N = 3
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, N, dolfinx.mesh.CellType.triangle)
     
 tdim = mesh.topology.dim
 mesh.topology.create_connectivity(tdim, 0)
 
-topology, cell_types, geometry = dolfinx.plot.vtk_mesh(mesh) # helper function to help remove ghosts nodes and elements
-nodes = geometry[:, :2] # Note that here I have still the ghost nodes
-cells = topology.reshape((-1, 4))[:, 1:] # Whereas here I have only the elements on the current node
+#topology, cell_types, geometry = dolfinx.plot.vtk_mesh(mesh) # helper function to help remove ghosts nodes and elements
+#nodes = geometry[:, :2] # Note that here I have still the ghost nodes
+#cells = topology.reshape((-1, 4))[:, 1:] # Whereas here I have only the elements on the current node
+
+elems = mesh.topology.connectivity(tdim, 0).array.reshape((-1, 3))
+nodes = mesh.geometry.x[:, :2]
+elems_index_map = mesh.topology.index_map(tdim)
+cells = elems[:elems_index_map.size_local, :]
 
 tri = Triangulation(nodes, cells) # Generate the triangulation
 
@@ -110,9 +115,9 @@ if MPI.COMM_WORLD.rank==0:
     plt.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, orientation='vertical', label='rank')
     for i in range(MPI.COMM_WORLD.size):
         facecolors = i*np.ones(tri[i].Nelems)
-        #nodecolors = i*np.ones(tri[i].Nnodes)
+        nodecolors = i*np.ones(tri[i].Nnodes)
         ax.tripcolor(tri[i].tri_plt, facecolors=facecolors, edgecolors='black', cmap=cmap, norm=norm, alpha=0.5)
-        #ax.scatter(tri[i].nodes[:, 0], tri[i].nodes[:,1], c=nodecolors, cmap=cmap, norm=norm, alpha=0.5)
+        ax.scatter(tri[i].nodes[:, 0], tri[i].nodes[:,1], c=nodecolors, cmap=cmap, norm=norm, alpha=0.5)
         
     if mesh_type=='from_file':
         

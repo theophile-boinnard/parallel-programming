@@ -25,20 +25,22 @@ import matplotlib.pyplot as plt
 ### Main ###
 
 DEBUG = True
-PLOT = False
+PLOT = True
 
 def log_info(msg, out=False):
     if out:
         print(msg)
 
-N = 4
+N = 3
 mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, N, dolfinx.mesh.CellType.triangle)
 tdim = mesh.topology.dim
 #elem_index_map = mesh.topology.index_map(tdim)
 #node_index_map = mesh.topology.index_map(0)
 
-#elems = domain.topology.connectivity(tdim, 0).array.reshape((-1, 3))
-#nodes = domain.geometry.x[:, :2]
+#elems = mesh.topology.connectivity(tdim, 0).array.reshape((-1, 3))
+#nodes = mesh.geometry.x[:, :2]
+#elems_index_map = mesh.topology.index_map(tdim)
+#cells = elems[:elems_index_map.size_local, :]
 
 topology, cell_types, geometry = dolfinx.plot.vtk_mesh(mesh)
 nodes = geometry[:, :2] # Includes ghost nodes
@@ -53,6 +55,7 @@ log_info(f'Rank {MPI.COMM_WORLD.rank} - {I.shape=}', DEBUG)
 log_info(f'Rank {MPI.COMM_WORLD.rank} - {J.shape=}', DEBUG)
 log_info(f'Rank {MPI.COMM_WORLD.rank} - {I=}', DEBUG)
 log_info(f'Rank {MPI.COMM_WORLD.rank} - {J=}', DEBUG)
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {V=}', DEBUG)
 
 log_info(f'Rank {MPI.COMM_WORLD.rank} - Surface of sub-mesh = {np.sum(tri.elem_surf)}', DEBUG)
 log_info(f'Rank {MPI.COMM_WORLD.rank} - Sum of mass matrix entries on sub-mesh = {np.sum(V)}', DEBUG)
@@ -64,7 +67,7 @@ ghost_indices = np.where(I>=index_map.size_local) # The rows of ghost nodes must
 log_info(f'Rank {MPI.COMM_WORLD.rank} - {local_indices=}', DEBUG)
 log_info(f'Rank {MPI.COMM_WORLD.rank} - {ghost_indices=}', DEBUG)
 
-I_local = I[local_indices]
+I_local = I[local_indices] 
 J_local = J[local_indices]
 V_local = V[local_indices]
 
@@ -81,6 +84,9 @@ V_ghost = V[ghost_indices]
 I_ghost_global = index_map.local_to_global(I_ghost)
 J_ghost_global = index_map.local_to_global(J_ghost)
 
+#I_ghost_global = I_ghost #+ index_map.local_range[0] 
+#J_ghost_global = J_ghost #+ index_map.local_range[0] 
+
 log_info(f'Rank {MPI.COMM_WORLD.rank} - Before allgather - {I_ghost_global=}', DEBUG)
 I_ghost_global = np.concatenate(MPI.COMM_WORLD.allgather(I_ghost_global)) # we do not know to which rank send the ghost nodes, so we send it to everyone
 J_ghost_global = np.concatenate(MPI.COMM_WORLD.allgather(J_ghost_global))
@@ -90,17 +96,28 @@ log_info(f'Rank {MPI.COMM_WORLD.rank} - After allgather - {I_ghost_global=}', DE
 
 # Keep only the vertices on current proc #
 global_indices = index_map.local_to_global(np.arange(index_map.size_local)) # If a global index of recieved ghost point is not in this array, it must be removed
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {global_indices=}', DEBUG)
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {np.arange(index_map.size_local) + index_map.local_range[0]=}', DEBUG)
 accepted_vertices = np.isin(I_ghost_global, global_indices)
 I_ghost_global = I_ghost_global[accepted_vertices]
 J_ghost_global = J_ghost_global[accepted_vertices]
 V_ghost = V_ghost[accepted_vertices]
 
 log_info(f'Rank {MPI.COMM_WORLD.rank} - Ghost kept - {I_ghost_global=}', DEBUG)
-I_ghost_local = index_map.global_to_local(I_ghost_global)
-J_ghost_local = index_map.global_to_local(J_ghost_global)
+log_info(f'Rank {MPI.COMM_WORLD.rank} - Ghost kept - {J_ghost_global=}', DEBUG)
+# I_ghost_local = index_map.global_to_local(I_ghost_global)
+# J_ghost_local = index_map.global_to_local(J_ghost_global)
+I_ghost_local = I_ghost_global - index_map.local_range[0] 
+#J_ghost_local = J_ghost_global - index_map.local_range[0] 
+
+log_info(f'Rank {MPI.COMM_WORLD.rank} - {I_ghost_local=}', DEBUG)
+#log_info(f'Rank {MPI.COMM_WORLD.rank} - {I_ghost_local=}', DEBUG)
+
+J_global = index_map.local_to_global(J_local)        
 
 I = np.concatenate((I_local, I_ghost_local))
-J = np.concatenate((J_local, J_ghost_local))
+# J = np.concatenate((J_local, J_ghost_local))
+J = np.concatenate((J_global, J_ghost_global))
 V = np.concatenate((V_local, V_ghost))
 
 log_info(f'Rank {MPI.COMM_WORLD.rank} - {I=}', DEBUG)
@@ -112,13 +129,14 @@ log_info(f'Rank {MPI.COMM_WORLD.rank} - {I.max()=}', DEBUG)
 log_info(f'Rank {MPI.COMM_WORLD.rank} - {J.min()=}', DEBUG)
 log_info(f'Rank {MPI.COMM_WORLD.rank} - {J.max()=}', DEBUG)
 
-M = csr_matrix((V, (I, J)), shape=(index_map.size_local, (N+1)**2)) # automatic sum of duplicate entries
+M = csr_matrix((V, (I, J)), shape=(index_map.size_local, index_map.size_global)) # automatic sum of duplicate entries
 M = M.tocoo()
 I = M.row
 J = M.col
 V = M.data
 I_global = index_map.local_to_global(I)
-J_global = index_map.local_to_global(J)
+# J_global = index_map.local_to_global(J)
+J_global = J
 
 I_global = MPI.COMM_WORLD.gather(I_global, root=0)
 J_global = MPI.COMM_WORLD.gather(J_global, root=0)
@@ -161,7 +179,10 @@ atol = 1e-10
 
 if PLOT:
 
-    fig, axs = plt.subplots(1, 3)
+    log_info(f'Rank {MPI.COMM_WORLD.rank} - {np.sum(M.todense())=}', DEBUG) 
+    log_info(f'Rank {MPI.COMM_WORLD.rank} - {np.sum(Md)=}', DEBUG) 
+    
+    fig, axs = plt.subplots(3, 1)
     axs[0].imshow(np.heaviside(M.todense(), 0))
     axs[0].set_title('M perso')
     axs[1].imshow(np.heaviside(Md, 0))
@@ -169,6 +190,7 @@ if PLOT:
     axs[2].imshow(diff>atol)
     axs[2].set_title('difference')
     fig.suptitle(f'Rank {MPI.COMM_WORLD.rank}')
+    plt.tight_layout()
     plt.show()
 
 # Show full mass matrix #
@@ -223,7 +245,11 @@ if MPI.COMM_WORLD.rank==0:
         plt.show()
     
     print(f'Mamimal difference between matrices entries {diff.max()}')
-    assert diff.max() < atol
-    print('Succesful computation of mass matrix')
-    
+    if diff.max() >= atol:
+        I, J = np.where(diff.todense() >= atol)
+        print(f'Indices at fault :')
+        print(f'{I=}')
+        print(f'{J=}')
+    else:
+        print('Succesful computation of mass matrix')
 

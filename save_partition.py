@@ -13,7 +13,8 @@ import h5py
 
 ### Main ###
 
-N = int(1024*np.sqrt(2))
+N = 8192
+#N = int(4096*np.sqrt(2))
 
 comm = MPI.COMM_WORLD
 rank = comm.rank

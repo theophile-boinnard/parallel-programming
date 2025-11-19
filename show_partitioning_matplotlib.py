@@ -71,7 +71,7 @@ if mesh_type=='from_file':
 
 if mesh_type=='square':
 
-    N = 3
+    N = 9
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, N, dolfinx.mesh.CellType.triangle)
     
 tdim = mesh.topology.dim
@@ -84,7 +84,9 @@ mesh.topology.create_connectivity(tdim, 0)
 elems = mesh.topology.connectivity(tdim, 0).array.reshape((-1, 3))
 nodes = mesh.geometry.x[:, :2]
 elems_index_map = mesh.topology.index_map(tdim)
-cells = elems[:elems_index_map.size_local, :]
+#cells = elems[:elems_index_map.size_local, :]
+cells = dolfinx.mesh.entities_to_geometry(mesh, tdim, np.arange(elems_index_map.size_local))
+
 
 tri = Triangulation(nodes, cells) # Generate the triangulation
 
@@ -108,6 +110,7 @@ tri = MPI.COMM_WORLD.gather(tri, root=0)
 
 
 if MPI.COMM_WORLD.rank==0:
+    alpha = 1/MPI.COMM_WORLD.size
     fig, ax = plt.subplots()
     ax.set_aspect('equal')
     cmap = 'viridis'
@@ -116,8 +119,8 @@ if MPI.COMM_WORLD.rank==0:
     for i in range(MPI.COMM_WORLD.size):
         facecolors = i*np.ones(tri[i].Nelems)
         nodecolors = i*np.ones(tri[i].Nnodes)
-        ax.tripcolor(tri[i].tri_plt, facecolors=facecolors, edgecolors='black', cmap=cmap, norm=norm, alpha=0.5)
-        ax.scatter(tri[i].nodes[:, 0], tri[i].nodes[:,1], c=nodecolors, cmap=cmap, norm=norm, alpha=0.5)
+        ax.tripcolor(tri[i].tri_plt, facecolors=facecolors, edgecolors='black', cmap=cmap, norm=norm, alpha=alpha)
+        ax.scatter(tri[i].nodes[:, 0], tri[i].nodes[:,1], c=nodecolors, cmap=cmap, norm=norm, alpha=alpha)
         
     if mesh_type=='from_file':
         
@@ -126,6 +129,6 @@ if MPI.COMM_WORLD.rank==0:
         
         for i in range(MPI.COMM_WORLD.size):
             nodecolors = i*np.ones(I[i].shape)
-            ax.scatter(global_tri.nodes[I[i], 0], global_tri.nodes[I[i], 1], c=nodecolors, cmap=cmap, norm=norm, alpha=0.5)
+            ax.scatter(global_tri.nodes[I[i], 0], global_tri.nodes[I[i], 1], c=nodecolors, cmap=cmap, norm=norm, alpha=alpha)
 
     plt.show()
